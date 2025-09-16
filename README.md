@@ -10,5 +10,5 @@ pip install -r requirements.txt
 
 ## Test 진행
 ```bash
-python test.py  --ckpt /workspace/0_Project/curation/New/checkpoints/Multipatch2/ckpt_ep299.pt --input_dir /workspace/0_Project/curation/New/pred/test_img_128/whole/ASAN --out_dir /workspace/0_Project/curation/New/pred/Multipatch_v2/whole/ASAN/patch_whole_ep299
+python test.py  --ckpt CKPT_DIR/ckpt_ep299.pt --input_dir INPUT_DIR --out_dir OUTPUT_DIR
 ```
