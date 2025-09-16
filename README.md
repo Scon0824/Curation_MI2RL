@@ -8,6 +8,8 @@ pip install -r requirements.txt
 
 ## weight 파일 다운로드
 
+다운받을 checkpoint 이름: ckpt_ep49.pt, ckpt_ep99.pt, ckpt_ep149.pt, ckpt_ep199.pt, ckpt_ep299.pt
+
 Weight File [link]([https://drive.google.com/drive/folders/15oec7i9XpTAIcysvrjSBC2IH7KtGwxyX?usp=drive_link](https://drive.google.com/drive/folders/1ijTA32hN52WjRORh7KmdaQ_jrxyDc4qw?usp=sharing).
 
 ## 코드의 경로 설정
@@ -22,7 +24,7 @@ GT_DIR: 변환된 NII label 폴더 경로
 
 CKPT_DIR : checkpoint 폴더의 경로
 
-(코드 작성 시 CKPT_DIR 이후에 /ckpt_ep299.pt까지 작성 필요)
+(코드 작성 시 CKPT_DIR 이후에 /ckpt_ep299.pt 등의 이름까지 작성 필요)
 
 OUTPUT_DIR: 예측된 label 저장 폴더 경로
 
