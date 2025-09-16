@@ -12,6 +12,8 @@ pip install -r requirements.txt
 
 CKPT_DIR : ckpt를 다운받은 폴더의 경로
 
+(CKPT_DIR 이후에 /ckpt_ep299.pt까지 작성 필요)
+
 INPUT_DIR: test를 진행할 image의 폴더 경로
 
 GT_DIR: test를 진행할 image의 레이블 폴더 경로
@@ -22,7 +24,7 @@ POST_DIR: 예측된 레이블의 후처리 이후 저장 폴더 경로
 
 CSV_DIR: 예측된 레이블의 결과 저장 파일 이름
 
-(CSV_DIR의 경우에는 파일 이름까지 작성해야함)
+(CSV_DIR 이후에 파일 이름까지 작성 필요)
 
 
 ## Test 진행
