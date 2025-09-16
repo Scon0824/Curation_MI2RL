@@ -1,0 +1,10 @@
+numpy==1.26.4
+natsort
+einops
+torchsummary
+matplotlib
+tqdm
+scikit-image
+scipy
+SimpleITK
+nibabel
