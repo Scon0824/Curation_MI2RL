@@ -8,7 +8,7 @@ pip install -r requirements.txt
 
 ## weight 파일 다운로드
 
-Weight File [link]([https://drive.google.com/drive/folders/15oec7i9XpTAIcysvrjSBC2IH7KtGwxyX?usp=drive_link](https://drive.google.com/drive/folders/1ijTA32hN52WjRORh7KmdaQ_jrxyDc4qw?usp=sharing)).
+Weight File [link]([https://drive.google.com/drive/folders/15oec7i9XpTAIcysvrjSBC2IH7KtGwxyX?usp=drive_link](https://drive.google.com/drive/folders/1ijTA32hN52WjRORh7KmdaQ_jrxyDc4qw?usp=sharing).
 
 ## 코드의 경로 설정
 
