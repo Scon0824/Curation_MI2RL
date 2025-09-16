@@ -58,18 +58,18 @@ def _read_pred_for_image(img_path, pred_dir):
 
 def _make_out_name(img_path, pred_path, out_dir):
     b = os.path.basename(pred_path)
-    if "_pred" in b:
-        name = b.replace("_pred", "_lbl")
+    if "_img_pred" in b:
+        name = b.replace("_img_pred", "_pred")
     else:
         low = b.lower()
         if low.endswith(".nii.gz"):
-            name = b[:-7] + "_lbl.nii.gz"
+            name = b[:-7] + "_pred.nii.gz"
         elif low.endswith(".nii"):
-            name = b[:-4] + "_lbl.nii.gz"
+            name = b[:-4] + "_pred.nii.gz"
         elif low.endswith(".npy") or low.endswith(".npz"):
-            name = os.path.splitext(b)[0] + "_lbl.npy"
+            name = os.path.splitext(b)[0] + "_pred.npy"
         else:
-            name = os.path.splitext(b)[0] + "_lbl"
+            name = os.path.splitext(b)[0] + "_pred"
     if _is_nii(img_path) and not name.lower().endswith((".nii",".nii.gz")):
         stem = os.path.splitext(name)[0]
         if stem.endswith(".nii"): stem = stem[:-4]
@@ -105,11 +105,11 @@ def _mask_by_hu(img_arr, pred_arr, hu_thresh=-600.0):
     pred_arr[img_arr < thr] = 0
     return pred_arr
 
-def _remove_small_components(pred_bin, ref_img_for_meta, min_voxels=50, fully_connected=True):
+def _remove_small_components(pred_bin, ref_img_for_meta, min_voxels=50):
     img = sitk.GetImageFromArray(pred_bin.astype(np.uint8, copy=False))
     if ref_img_for_meta is not None:
         img.CopyInformation(ref_img_for_meta)
-    cc = sitk.ConnectedComponent(img, fullyConnected=bool(fully_connected))
+    cc = sitk.ConnectedComponent(img)
     rel = sitk.RelabelComponent(cc, minimumObjectSize=int(min_voxels))
     out = sitk.BinaryThreshold(rel, lowerThreshold=1, upperThreshold=2**31-1, insideValue=1, outsideValue=0)
     return sitk.GetArrayFromImage(out).astype(np.uint8)
@@ -121,7 +121,6 @@ def main():
     ap.add_argument("--post_dir", type=str, required=True)
     ap.add_argument("--min_hu", type=float, default=-600.0)
     ap.add_argument("--min_cluster", type=int, default=50)
-    ap.add_argument("--fully_connected", action="store_true")
     args = ap.parse_args()
 
     os.makedirs(args.post_dir, exist_ok=True)
@@ -136,7 +135,6 @@ def main():
             pred_hu,
             img_ref if img_ref is not None else pred_ref,
             min_voxels=args.min_cluster,
-            fully_connected=bool(args.fully_connected),
         )
         out_path = _make_out_name(ip, pred_path, args.post_dir)
         _save_lbl(img_ref if img_ref is not None else pred_ref, pred_cc, out_path)

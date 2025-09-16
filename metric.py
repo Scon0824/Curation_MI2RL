@@ -45,6 +45,7 @@ def _read_arr(path):
 def _pair_gt_for_post(post_path, gt_dir):
     b = os.path.basename(post_path)
     core = _stem_core(b)
+    core = core.replace("_pred", "")
     cands = [
         os.path.join(gt_dir, core + ".nii.gz"),
         os.path.join(gt_dir, core + ".nii"),
@@ -62,11 +63,7 @@ def _pair_gt_for_post(post_path, gt_dir):
 
 def _ensure_binary(a):
     a = np.asarray(a)
-    if a.dtype == np.bool_:
-        return a.astype(np.uint8)
-    if a.dtype != np.uint8:
-        a = (a > 0).astype(np.uint8)
-    return a
+    return (a > 0).astype(np.uint8)  # <— FIX: 255 → 1, floats → 0/1, bool → 0/1
 
 def _dice_bin(pred, gt):
     pred = _ensure_binary(pred)
@@ -86,12 +83,12 @@ def _voxel_recall(pred, gt):
         return 1.0
     return tp / g
 
-def _component_recall(pred, gt, fully_connected=True):
+def _component_recall(pred, gt):
     pred = _ensure_binary(pred)
     gt   = _ensure_binary(gt)
     gt_img   = sitk.GetImageFromArray(gt.astype(np.uint8, copy=False))
     pred_img = sitk.GetImageFromArray(pred.astype(np.uint8, copy=False))
-    cc = sitk.ConnectedComponent(gt_img, fullyConnected=bool(fully_connected))
+    cc = sitk.ConnectedComponent(gt_img)
     stats = sitk.LabelShapeStatisticsImageFilter()
     stats.Execute(cc)
     n_labels = len(stats.GetLabels())
@@ -99,8 +96,7 @@ def _component_recall(pred, gt, fully_connected=True):
         return 1.0
     over = 0
     for lab in stats.GetLabels():
-        bb = stats.GetBoundingBox(lab)
-        z0, y0, x0, dz, dy, dx = bb
+        z0, y0, x0, dz, dy, dx = stats.GetBoundingBox(lab)
         z1, y1, x1 = z0 + dz, y0 + dy, x0 + dx
         gt_crop   = gt[z0:z1, y0:y1, x0:x1]
         pred_crop = pred[z0:z1, y0:y1, x0:x1]
@@ -113,7 +109,6 @@ def main():
     ap.add_argument("--gt_dir", type=str, required=True)
     ap.add_argument("--post_dir", type=str, required=True)
     ap.add_argument("--out_csv", type=str, required=True)
-    ap.add_argument("--fully_connected", action="store_true")
     args = ap.parse_args()
 
     posts = _list_files(args.post_dir)
@@ -136,33 +131,31 @@ def main():
 
         d = _dice_bin(post_bin, gt_bin)
         r = _voxel_recall(post_bin, gt_bin)
-        c = _component_recall(post_bin, gt_bin, fully_connected=args.fully_connected)
 
-        dvals.append(d); rvals.append(r); cvals.append(c)
+        dvals.append(d); rvals.append(r)
         tp = int(np.sum((post_bin==1) & (gt_bin==1)))
         fp = int(np.sum((post_bin==1) & (gt_bin==0)))
         fn = int(np.sum((post_bin==0) & (gt_bin==1)))
         rows.append([
             os.path.basename(pp),
-            os.path.basename(gp),
             int(gt_bin.sum()),
             int(post_bin.sum()),
             tp, fp, fn,
-            float(d), float(r), float(c)
+            f"{d:.4f}",
+            f"{r:.4f}", 
         ])
 
     os.makedirs(os.path.dirname(args.out_csv), exist_ok=True)
     with open(args.out_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["case_post","case_gt","gt_voxels","post_voxels","tp","fp","fn","dice","voxel_recall","component_recall"])
+        w.writerow(["case","gt_voxels","post_voxels","tp","fp","fn","dice","voxel_recall"])
         for r in rows:
             w.writerow(r)
 
     if dvals:
         md = float(np.mean(dvals)); sd = float(np.std(dvals))
         mr = float(np.mean(rvals)); sr = float(np.std(rvals))
-        mc = float(np.mean(cvals)); sc = float(np.std(cvals))
-        print(f"Dice mean±std: {md:.4f} ± {sd:.4f}  |  Recall(mean±std): {mr:.4f} ± {sr:.4f}  |  CompRecall(mean±std): {mc:.4f} ± {sc:.4f}")
+        print(f"Dice mean±std: {md:.4f} ± {sd:.4f}  |  Recall(mean±std): {mr:.4f} ± {sr:.4f}")
     else:
         print("No valid pairs evaluated.")
 
