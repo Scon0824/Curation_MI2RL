@@ -22,7 +22,7 @@ GT_DIR: 변환된 NII label 폴더 경로
 
 CKPT_DIR : checkpoint 폴더의 경로
 
-(코드 작성 시 CKPT_DIR 이후에 /ckpt_ep299.pt 등의 이름까지 작성 필요)
+(CKPT_DIR 이후에 /ckpt_ep##.pt 등의 이름까지 작성 필요)
 
 OUTPUT_DIR: 예측된 label 저장 폴더 경로
 
@@ -30,7 +30,7 @@ POST_DIR: 예측된 label의 postprocessing 저장 폴더 경로
 
 CSV_DIR: Metric 저장 폴더 경로
 
-(CSV_DIR 이후에 저장할 파일 이름까지 작성 필요)
+(CSV_DIR 이후에 metric_ep##.csv 등의 이름까지 작성 필요)
 
 ## NII 변환 진행
 
@@ -50,7 +50,7 @@ Test의 경우에는 총 5개의 checkpoint에 대하여 진행하고 싶습니�
 ckpt_ep299, ckpt_ep49, ckpt_ep99, ckpt_ep149, ckpt_ep199 순서대로 진행해주시면 감사하겠습니다.
 
 ```bash
-python test.py --ckpt CKPT_DIR/ckpt_ep299.pt --input_dir NII_DIR --out_dir OUTPUT_DIR
+python test.py --ckpt CKPT_DIR/ckpt_ep##.pt --input_dir NII_DIR --out_dir OUTPUT_DIR
 ```
 
 ## Postprocessing 진행
