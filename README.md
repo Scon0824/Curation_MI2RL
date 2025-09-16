@@ -8,9 +8,7 @@ pip install -r requirements.txt
 
 ## weight 파일 다운로드
 
-다운받을 checkpoint 이름: ckpt_ep49.pt, ckpt_ep99.pt, ckpt_ep149.pt, ckpt_ep199.pt, ckpt_ep299.pt
-
-Weight File [link]([https://drive.google.com/drive/folders/15oec7i9XpTAIcysvrjSBC2IH7KtGwxyX?usp=drive_link](https://drive.google.com/drive/folders/1ijTA32hN52WjRORh7KmdaQ_jrxyDc4qw?usp=sharing).
+Weight File [link]([https://drive.google.com/drive/folders/15oec7i9XpTAIcysvrjSBC2IH7KtGwxyX?usp=drive_link].
 
 ## 코드의 경로 설정
 
