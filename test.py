@@ -205,8 +205,8 @@ def main():
     ap.add_argument("--ckpt", type=str, required=True)
     ap.add_argument("--input_dir", type=str, required=True)
     ap.add_argument("--out_dir", type=str, required=True)
-    ap.add_argument("--patch", type=str, required=True)
-    ap.add_argument("--overlap", type=float, default=0.5)
+    ap.add_argument("--patch", type=str, required=True, default="whole")
+    ap.add_argument("--overlap", type=float, default=0.2)
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
