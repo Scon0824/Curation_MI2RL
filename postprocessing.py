@@ -95,14 +95,30 @@ def _binarize(pred_arr, thr=0.5):
 def _mask_by_hu(img_arr, pred_arr, hu_thresh=-600.0):
     img_arr = np.asarray(img_arr)
     pred_arr = np.asarray(pred_arr)
-    amin = float(np.nanmin(img_arr))
-    amax = float(np.nanmax(img_arr))
-    if amin >= -0.2 and amax <= 1.2:
+    amin = float(np.nanmin(img_arr)); amax = float(np.nanmax(img_arr))
+    if amin >= -0.2 and amax <= 1.2:  # already [0,1]
         thr = (hu_thresh + 1024.0) / (3071.0 + 1024.0)
     else:
         thr = hu_thresh
     pred_arr = pred_arr.copy()
     pred_arr[img_arr < thr] = 0
+    return pred_arr
+
+def _zero_bad_slices(img_arr, pred_arr, air_hu=-500.0, ratio_thr=0.62):
+    img_arr = np.asarray(img_arr)
+    pred_arr = np.asarray(pred_arr).copy()
+    amin = float(np.nanmin(img_arr)); amax = float(np.nanmax(img_arr))
+    if amin >= -0.2 and amax <= 1.2:  # normalized [0,1]
+        air_thr = (air_hu + 1024.0) / (3071.0 + 1024.0)
+    else:
+        air_thr = air_hu
+    Z, H, W = img_arr.shape
+    air_mask = img_arr < air_thr
+    air_counts = air_mask.reshape(Z, -1).sum(axis=1)
+    total_per_slice = H * W
+    air_ratios = air_counts.astype(np.float32) / float(total_per_slice)
+    good_slices = air_ratios > float(ratio_thr)
+    pred_arr[~good_slices, :, :] = 0
     return pred_arr
 
 def _remove_small_components(pred_bin, ref_img_for_meta, min_voxels=50):
@@ -121,6 +137,8 @@ def main():
     ap.add_argument("--post_dir", type=str, required=True)
     ap.add_argument("--min_hu", type=float, default=-600.0)
     ap.add_argument("--min_cluster", type=int, default=50)
+    ap.add_argument("--air_hu", type=float, default=-500.0)
+    ap.add_argument("--air_ratio", type=float, default=0.62)
     args = ap.parse_args()
 
     os.makedirs(args.post_dir, exist_ok=True)
@@ -129,13 +147,16 @@ def main():
     for ip in tqdm(imgs, desc="postprocess", ncols=100, leave=False):
         img_ref, img_arr = _read_img(ip)
         pred_path, pred_ref, pred_arr = _read_pred_for_image(ip, args.out_dir)
+
         pred_bin = _binarize(pred_arr, thr=0.5)
-        pred_hu = _mask_by_hu(img_arr, pred_bin, hu_thresh=args.min_hu)
-        pred_cc = _remove_small_components(
-            pred_hu,
+        pred_hu  = _mask_by_hu(img_arr, pred_bin, hu_thresh=args.min_hu)
+        pred_sl  = _zero_bad_slices(img_arr, pred_hu, air_hu=args.air_hu, ratio_thr=args.air_ratio)
+        pred_cc  = _remove_small_components(
+            pred_sl,
             img_ref if img_ref is not None else pred_ref,
             min_voxels=args.min_cluster,
         )
+
         out_path = _make_out_name(ip, pred_path, args.post_dir)
         _save_lbl(img_ref if img_ref is not None else pred_ref, pred_cc, out_path)
 
