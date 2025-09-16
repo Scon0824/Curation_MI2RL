@@ -52,7 +52,7 @@ python test.py --ckpt CKPT_DIR/ckpt_ep299.pt --input_dir NII_DIR --out_dir OUTPU
 ## Postprocessing 진행
 
 ```bash
-python test.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR
+python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR
 ```
 
 ## Metric 진행
