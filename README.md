@@ -29,13 +29,13 @@ CSV_DIR: Metric 저장 폴더 경로
 
 (CSV_DIR 이후에 저장할 파일 이름까지 작성 필요)
 
-## 원본 이미지 형식 변환 진행
+## NII 변환 진행
 
-DICOM2nii
+DICOM2NII
 ```bash
 python dcm2nii.py --dcm_dir DCM_DIR --nii_dir NII_DIR
 ```
-GT2nii
+LBL2NII
 ```python
 python dcm2nii.py --dcm_dir LBL_DIR --nii_dir GT_DIR
 ```
