@@ -47,7 +47,7 @@ python dcm2nii.py --dcm_dir LBL_DIR --nii_dir GT_DIR
 
 Test의 경우에는 총 5개의 checkpoint에 대하여 진행하고 싶습니다.
 
-데이터가 많아 시간이 부족한 경우에 ckpt_ep299, ckpt_ep49, ckpt_ep99, ckpt_ep149, ckpt_ep199 순서로 진행해주시면 감사하겠습니다.
+ckpt_ep299, ckpt_ep49, ckpt_ep99, ckpt_ep149, ckpt_ep199 순서대로 진행해주시면 감사하겠습니다.
 
 ```bash
 python test.py --ckpt CKPT_DIR/ckpt_ep299.pt --input_dir NII_DIR --out_dir OUTPUT_DIR
