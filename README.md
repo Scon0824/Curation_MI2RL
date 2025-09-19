@@ -56,7 +56,7 @@ python test.py --ckpt CKPT_DIR/ckpt_ep##.pt --input_dir NII_DIR --out_dir OUTPUT
 ## Postprocessing 진행
 
 ```bash
-python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR
+python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --air_ratio 0.30
 ```
 
 ## Metric 진행
