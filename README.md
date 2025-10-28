@@ -36,7 +36,7 @@ CSV_DIR: Metric 저장 폴더 경로
 
 ## Center Point -> Excel로 저장
 ```bash
-python preprocessing.py --dcm_dir GT_DIR --excel_path EXCEL_DIR
+python preprocessing.py --gt_dir GT_DIR --excel_path EXCEL_DIR
 ```
 
 ## NII 변환 진행
