@@ -1,164 +1,215 @@
 import os
-import argparse
 import numpy as np
 import SimpleITK as sitk
-from tqdm import tqdm
+from natsort import natsorted
 
-def _is_nii(path):
-    p = path.lower()
-    return p.endswith(".nii") or p.endswith(".nii.gz")
+def _is_nii(p):
+    pl = p.lower()
+    return pl.endswith(".nii") or pl.endswith(".nii.gz")
 
-def _list_images(img_dir):
-    names = [f for f in os.listdir(img_dir) if f.lower().endswith((".nii",".nii.gz",".npy",".npz"))]
-    names.sort()
-    return [os.path.join(img_dir, n) for n in names]
+def _strip_ext(b):
+    lb = b.lower()
+    if lb.endswith(".nii.gz"):
+        return b[:-7]
+    if lb.endswith(".nii"):
+        return b[:-4]
+    return os.path.splitext(b)[0]
 
-def _read_img(path):
-    if _is_nii(path):
-        ref = sitk.ReadImage(path)
-        arr = sitk.GetArrayFromImage(ref)
-        return ref, arr
-    if path.lower().endswith(".npy"):
-        arr = np.load(path, mmap_mode=None)
-        return None, np.asarray(arr)
-    with np.load(path) as z:
-        arr = z["arr"]
-    return None, np.asarray(arr)
+def _stem_core(b):
+    b = _strip_ext(b)
+    suf = ("_lbl","_pred","_post","_img")
+    changed = True
+    while changed:
+        changed = False
+        for s in suf:
+            if b.endswith(s):
+                b = b[: -len(s)]
+                changed = True
+    while b.endswith("_"):
+        b = b[:-1]
+    return b
 
-def _read_pred_for_image(img_path, pred_dir):
-    base = os.path.basename(img_path)
-    low = base.lower()
-    if low.endswith(".nii.gz"):
-        stem = base[:-7]
-    elif low.endswith(".nii"):
-        stem = base[:-4]
-    else:
-        stem = os.path.splitext(base)[0]
-    cands = [
-        os.path.join(pred_dir, stem + "_pred.nii.gz"),
-        os.path.join(pred_dir, stem + "_pred.nii"),
-        os.path.join(pred_dir, stem + "_pred.npy"),
-        os.path.join(pred_dir, stem + ".nii.gz"),
-        os.path.join(pred_dir, stem + ".npy"),
-        os.path.join(pred_dir, base),
-    ]
-    pred_path = next((c for c in cands if os.path.exists(c)), None)
-    if pred_path is None:
-        raise FileNotFoundError(f"Prediction not found for {img_path}")
+def _read_pred_array(pred_path):
     if _is_nii(pred_path):
-        ref = sitk.ReadImage(pred_path)
-        arr = sitk.GetArrayFromImage(ref)
-        return pred_path, ref, arr
+        pref = sitk.ReadImage(pred_path)
+        return pref, sitk.GetArrayFromImage(pref)
     if pred_path.lower().endswith(".npy"):
-        arr = np.load(pred_path, mmap_mode=None)
-        return pred_path, None, np.asarray(arr)
+        return None, np.load(pred_path)
     with np.load(pred_path) as z:
-        arr = z["arr"]
-    return pred_path, None, np.asarray(arr)
+        return None, z["arr"]
 
-def _make_out_name(img_path, pred_path, out_dir):
+def _find_img(pred_path, input_dir):
+    base = os.path.basename(pred_path)
+    core = _stem_core(base)
+    cands = [
+        f"{core}_img.nii.gz",
+        f"{core}.nii.gz",
+        f"{core}_img.nii",
+        f"{core}.nii",
+    ]
+    for c in cands:
+        p = os.path.join(input_dir, c)
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError(f"no matching CT for {pred_path}")
+
+def _connected_components(arr, ref):
+    img = sitk.GetImageFromArray(arr.astype(np.uint8))
+    img.CopyInformation(ref)
+    return sitk.GetArrayFromImage(sitk.ConnectedComponent(img))
+
+def _danielsson(bin_arr, ref):
+    img = sitk.GetImageFromArray(bin_arr.astype(np.uint8))
+    img.CopyInformation(ref)
+    return sitk.GetArrayFromImage(sitk.DanielssonDistanceMap(img, False, False))
+
+def _make_lung(img_path, hu_threshold):
+    img = sitk.ReadImage(img_path)
+    arr = sitk.GetArrayFromImage(img).astype(np.float32)
+    lung = (arr <= float(hu_threshold)).astype(np.uint8)
+    bin_img = sitk.GetImageFromArray(lung); bin_img.CopyInformation(img)
+    cc = sitk.ConnectedComponent(bin_img)
+    r = sitk.RelabelComponent(cc, sortByObjectSize=True)
+    stats = sitk.LabelShapeStatisticsImageFilter(); stats.Execute(r)
+    size_x, size_y, size_z = r.GetSize()
+    keeps = []
+    for lab in stats.GetLabels():
+        x0,y0,z0, sx,sy,sz = stats.GetBoundingBox(lab)
+        x1 = x0+sx-1; y1 = y0+sy-1
+        if not (x0==0 or x1==size_x-1 or y0==0 or y1==size_y-1):
+            keeps.append((lab, stats.GetNumberOfPixels(lab)))
+    keeps.sort(key=lambda t:t[1], reverse=True)
+    keeps = keeps[:2]
+    r_arr = sitk.GetArrayFromImage(r)
+    out = np.zeros_like(r_arr, dtype=np.uint8)
+    for i,(lab,_) in enumerate(keeps, start=1):
+        out[r_arr==lab] = i
+    if np.sum(out==2)>500000:
+        out[out==2]=1
+    else:
+        out[out==2]=0
+    return img, out
+
+def _binary_dilate(arr, ref, r):
+    img = sitk.GetImageFromArray(arr.astype(np.uint8))
+    img.CopyInformation(ref)
+    rr = int(max(r,0))
+    dil = sitk.BinaryDilate(img, [rr, rr, rr])
+    return sitk.GetArrayFromImage(dil)
+
+def _select_surface(cc_arr, keep_mask, lung_bin, ref, topk, dilate_r):
+    labs = np.unique(cc_arr[keep_mask]); labs = labs[labs>0]
+    if labs.size==0: return keep_mask
+    lung_d = _binary_dilate(lung_bin, ref, dilate_r)
+    scores=[]
+    for lab in labs:
+        comp = (cc_arr==lab)
+        score = int(np.sum(comp & (lung_d>0)))
+        scores.append((score, lab))
+    scores.sort(key=lambda t:t[0], reverse=True)
+    chosen = {lab for score,lab in scores[:max(1,topk)] if score>0}
+    if not chosen: return keep_mask
+    m = np.zeros_like(keep_mask, bool)
+    for lab in chosen:
+        m |= (cc_arr==lab)
+    return m
+
+def _z_bounds(lung_bin):
+    idx = np.where(lung_bin>0)[0]
+    return (int(idx.min()), int(idx.max())) if idx.size>0 else None
+
+def _apply_z_strict(cc_arr, keep_mask, lung_bin, ref):
+    zb = _z_bounds(lung_bin)
+    if zb is None:
+        return np.zeros_like(keep_mask,bool)
+    z0,z1 = zb
+    z_spacing = ref.GetSpacing()[2]
+    margin = int(np.ceil(20.0 / max(z_spacing, 1e-6)))
+    if z1 - z0 + 1 <= 2*margin:
+        return np.zeros_like(keep_mask,bool)
+    z0m = z0 + margin
+    z1m = z1 - margin
+    labs = np.unique(cc_arr[keep_mask]); labs = labs[labs>0]
+    m=np.zeros_like(keep_mask,bool)
+    for lab in labs:
+        comp=(cc_arr==lab)
+        z_idx=np.where(comp.any(axis=(1,2)))[0]
+        if z_idx.size>0 and (z_idx.min()>=z0m and z_idx.max()<=z1m):
+            m |= comp
+    return m
+
+def _apply_z_clip(keep_mask, lung_bin):
+    zb = _z_bounds(lung_bin)
+    if zb is None:
+        return np.zeros_like(keep_mask,bool)
+    z0,z1 = zb
+    m = np.zeros_like(keep_mask,bool); m[z0:z1+1] = True
+    return keep_mask & m
+
+def _make_out(pred_path, post_dir):
     b = os.path.basename(pred_path)
-    if "_img_pred" in b:
-        name = b.replace("_img_pred", "_pred")
-    else:
-        low = b.lower()
-        if low.endswith(".nii.gz"):
-            name = b[:-7] + "_pred.nii.gz"
-        elif low.endswith(".nii"):
-            name = b[:-4] + "_pred.nii.gz"
-        elif low.endswith(".npy") or low.endswith(".npz"):
-            name = os.path.splitext(b)[0] + "_pred.npy"
+    if b.lower().endswith(".nii.gz"):
+        return os.path.join(post_dir, b[:-7] + "_post.nii.gz")
+    if b.lower().endswith(".nii"):
+        return os.path.join(post_dir, b[:-4] + "_post.nii.gz")
+    return os.path.join(post_dir, os.path.splitext(b)[0] + "_post.npy")
+
+def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh, select_surface, topk, dilate_radius, clip_z, z_strict):
+    os.makedirs(post_dir, exist_ok=True)
+    preds = natsorted([f for f in os.listdir(out_dir) if f.lower().endswith((".nii",".nii.gz",".npy",".npz"))])
+    for case in preds:
+        pred_path = os.path.join(out_dir, case)
+        img_path = _find_img(pred_path, input_dir)
+        img_ref, lung_arr = _make_lung(img_path, hu_threshold)
+        pref, pred_arr = _read_pred_array(pred_path)
+        ref = pref if pref is not None else img_ref
+        pred_bin=(pred_arr>0).astype(np.uint8)
+        cc_arr=_connected_components(pred_bin, ref)
+        lung_bin=(lung_arr>0).astype(np.uint8)
+        dist_arr=_danielsson(lung_bin, ref)
+        keep=np.zeros_like(pred_bin,bool)
+        for lab in range(1,int(cc_arr.max())+1):
+            comp=(cc_arr==lab)
+            if comp.any() and dist_arr[comp].min()<=dist_thresh:
+                keep|=comp
+        if z_strict:
+            keep=_apply_z_strict(cc_arr, keep, lung_bin, ref)
+        elif clip_z:
+            keep=_apply_z_clip(keep, lung_bin)
+        if select_surface:
+            keep=_select_surface(cc_arr, keep, lung_bin, ref, topk, dilate_radius)
+        out = np.where(keep, pred_arr, 0).astype(pred_arr.dtype)
+        ct = sitk.GetArrayFromImage(img_ref).astype(np.float32)
+        out[ct <= hu_threshold] = 0
+        out_path=_make_out(pred_path,post_dir)
+        if _is_nii(out_path):
+            o=sitk.GetImageFromArray(out); o.CopyInformation(ref); sitk.WriteImage(o,out_path)
         else:
-            name = os.path.splitext(b)[0] + "_pred"
-    if _is_nii(img_path) and not name.lower().endswith((".nii",".nii.gz")):
-        stem = os.path.splitext(name)[0]
-        if stem.endswith(".nii"): stem = stem[:-4]
-        name = stem + ".nii.gz"
-    return os.path.join(out_dir, name)
+            np.save(out_path,out)
 
-def _save_lbl(ref_img, arr, out_path):
-    arr = arr.astype(np.uint8, copy=False)
-    if _is_nii(out_path):
-        img = sitk.GetImageFromArray(arr)
-        if ref_img is not None:
-            img.CopyInformation(ref_img)
-        sitk.WriteImage(img, out_path)
-    else:
-        np.save(out_path, arr)
-
-def _binarize(pred_arr, thr=0.5):
-    a = np.asarray(pred_arr)
-    if a.dtype != np.uint8:
-        a = (a >= thr).astype(np.uint8)
-    return a
-
-def _mask_by_hu(img_arr, pred_arr, hu_thresh=-600.0):
-    img_arr = np.asarray(img_arr)
-    pred_arr = np.asarray(pred_arr)
-    amin = float(np.nanmin(img_arr)); amax = float(np.nanmax(img_arr))
-    if amin >= -0.2 and amax <= 1.2:  # already [0,1]
-        thr = (hu_thresh + 1024.0) / (3071.0 + 1024.0)
-    else:
-        thr = hu_thresh
-    pred_arr = pred_arr.copy()
-    pred_arr[img_arr < thr] = 0
-    return pred_arr
-
-def _zero_bad_slices(img_arr, pred_arr, air_hu=-500.0, ratio_thr=0.62):
-    img_arr = np.asarray(img_arr)
-    pred_arr = np.asarray(pred_arr).copy()
-    amin = float(np.nanmin(img_arr)); amax = float(np.nanmax(img_arr))
-    if amin >= -0.2 and amax <= 1.2:  # normalized [0,1]
-        air_thr = (air_hu + 1024.0) / (3071.0 + 1024.0)
-    else:
-        air_thr = air_hu
-    Z, H, W = img_arr.shape
-    air_mask = img_arr < air_thr
-    air_counts = air_mask.reshape(Z, -1).sum(axis=1)
-    total_per_slice = H * W
-    air_ratios = air_counts.astype(np.float32) / float(total_per_slice)
-    good_slices = air_ratios > float(ratio_thr)
-    pred_arr[~good_slices, :, :] = 0
-    return pred_arr
-
-def _remove_small_components(pred_bin, ref_img_for_meta, min_voxels=50):
-    img = sitk.GetImageFromArray(pred_bin.astype(np.uint8, copy=False))
-    if ref_img_for_meta is not None:
-        img.CopyInformation(ref_img_for_meta)
-    cc = sitk.ConnectedComponent(img)
-    rel = sitk.RelabelComponent(cc, minimumObjectSize=int(min_voxels))
-    out = sitk.BinaryThreshold(rel, lowerThreshold=1, upperThreshold=2**31-1, insideValue=1, outsideValue=0)
-    return sitk.GetArrayFromImage(out).astype(np.uint8)
-
-def main():
-    ap = argparse.ArgumentParser()
+if __name__=="__main__":
+    import argparse
+    ap=argparse.ArgumentParser()
     ap.add_argument("--input_dir", type=str, required=True)
     ap.add_argument("--out_dir", type=str, required=True)
     ap.add_argument("--post_dir", type=str, required=True)
-    ap.add_argument("--min_hu", type=float, default=-600.0)
-    ap.add_argument("--min_cluster", type=int, default=50)
-    ap.add_argument("--air_hu", type=float, default=-500.0)
-    ap.add_argument("--air_ratio", type=float, default=0.62)
-    args = ap.parse_args()
-
-    os.makedirs(args.post_dir, exist_ok=True)
-    imgs = _list_images(args.input_dir)
-
-    for ip in tqdm(imgs, desc="postprocess", ncols=100, leave=False):
-        img_ref, img_arr = _read_img(ip)
-        pred_path, pred_ref, pred_arr = _read_pred_for_image(ip, args.out_dir)
-
-        pred_bin = _binarize(pred_arr, thr=0.5)
-        pred_hu  = _mask_by_hu(img_arr, pred_bin, hu_thresh=args.min_hu)
-        pred_sl  = _zero_bad_slices(img_arr, pred_hu, air_hu=args.air_hu, ratio_thr=args.air_ratio)
-        pred_cc  = _remove_small_components(
-            pred_sl,
-            img_ref if img_ref is not None else pred_ref,
-            min_voxels=args.min_cluster,
-        )
-
-        out_path = _make_out_name(ip, pred_path, args.post_dir)
-        _save_lbl(img_ref if img_ref is not None else pred_ref, pred_cc, out_path)
-
-if __name__ == "__main__":
-    main()
+    ap.add_argument("--hu_threshold", type=float, default=-700)
+    ap.add_argument("--dist_thresh", type=float, default=3)
+    ap.add_argument("--select_surface", action="store_true")
+    ap.add_argument("--topk", type=int, default=1)
+    ap.add_argument("--dilate_radius", type=int, default=1)
+    ap.add_argument("--clip_z", action="store_true")
+    ap.add_argument("--z_strict", action="store_true")
+    args=ap.parse_args()
+    filter_inline(
+        args.input_dir,
+        args.out_dir if hasattr(args, "out_dir") else args.out_dir,
+        args.post_dir if hasattr(args, "post_dir") else args.post_dir,
+        args.hu_threshold,
+        args.dist_thresh,
+        args.select_surface,
+        args.topk,
+        args.dilate_radius,
+        args.clip_z,
+        args.z_strict
+    )
