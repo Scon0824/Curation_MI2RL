@@ -20,6 +20,8 @@ LBL_DIR:  원본 DICOM label 폴더 경로
 
 GT_DIR: 변환된 NII label 폴더 경로
 
+EXCEL_DIR: Center point가 담긴 엑셀 파일 저장 경로
+
 CKPT_DIR : checkpoint 폴더의 경로
 
 (CKPT_DIR 이후에 /ckpt_ep##.pt 등의 이름까지 작성 필요)
@@ -68,7 +70,7 @@ Excel 파일이 있는 경우
 ```bash
 python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --excel_path EXCEL_DIR --sheet_name SHEET_NAME
 ```
-엑셀 파일이 없는 경우
+Excel 파일이 없는 경우
 ```bash
 python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --select_surface --z_strict
 ```
