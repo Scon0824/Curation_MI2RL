@@ -154,7 +154,82 @@ def _make_out(pred_path, post_dir):
         return os.path.join(post_dir, b[:-4] + "_post.nii.gz")
     return os.path.join(post_dir, os.path.splitext(b)[0] + "_post.npy")
 
-def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh, select_surface, topk, dilate_radius, clip_z, z_strict):
+def _normalize_case_name(s):
+    s = str(s)
+    if s.endswith(".nii.gz"):
+        s = s[:-7]
+    elif s.endswith(".nii"):
+        s = s[:-4]
+    for suf in ("_pred","_prediction","_mask","_lbl","_img","_post"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+    while s.endswith("_"):
+        s = s[:-1]
+    return s
+
+def _read_xyz_median_from_excel(excel_path, sheet_name, case_name):
+    import pandas as pd
+    df = pd.read_excel(excel_path, sheet_name=sheet_name)
+    cols = {c.lower(): c for c in df.columns}
+    norm_target = _normalize_case_name(case_name)
+    if ("case" in cols) and ("z" in cols) and ("y" in cols) and ("x" in cols):
+        name_col = cols["case"]; zc,yc,xc = cols["z"], cols["y"], cols["x"]
+        df["_norm_case"] = df[name_col].astype(str).apply(_normalize_case_name)
+        rows = df[df["_norm_case"] == norm_target]
+        if len(rows) == 0:
+            raise KeyError(f"case not found: {case_name}")
+        z = float(rows[zc].median())
+        y = float(rows[yc].median())
+        x = float(rows[xc].median())
+        return int(round(z)), int(round(y)), int(round(x))
+    if {"z","y","x"}.issubset(set(str(i).strip().lower() for i in df.iloc[:,0].tolist())):
+        first_col = df.columns[0]
+        df[first_col] = df[first_col].astype(str).str.strip().str.lower()
+        df = df.set_index(first_col)
+        norm_cols = {_normalize_case_name(c): c for c in df.columns}
+        if norm_target not in norm_cols:
+            raise KeyError(f"case not found: {case_name}")
+        c = norm_cols[norm_target]
+        z = float(np.median(np.array(df.loc["z", c]).astype(float).ravel()))
+        y = float(np.median(np.array(df.loc["y", c]).astype(float).ravel()))
+        x = float(np.median(np.array(df.loc["x", c]).astype(float).ravel()))
+        return int(round(z)), int(round(y)), int(round(x))
+    raise ValueError("excel format unsupported")
+
+def _clip_center(z, y, x, shape):
+    Z,Y,X = shape
+    z = max(0, min(Z-1, int(z)))
+    y = max(0, min(Y-1, int(y)))
+    x = max(0, min(X-1, int(x)))
+    return z,y,x
+
+def _sphere_mask(shape, center, radius_vox):
+    Z,Y,X = shape
+    cz,cy,cx = center
+    r = int(max(0, int(radius_vox)))
+    z0 = max(0, cz - r); z1 = min(Z, cz + r + 1)
+    y0 = max(0, cy - r); y1 = min(Y, cy + r + 1)
+    x0 = max(0, cx - r); x1 = min(X, cx + r + 1)
+    mask = np.zeros(shape, dtype=bool)
+    zz = np.arange(z0, z1)[:, None, None]
+    yy = np.arange(y0, y1)[None, :, None]
+    xx = np.arange(x0, x1)[None, None, :]
+    sub = (zz - cz)**2 + (yy - cy)**2 + (xx - cx)**2 <= r**2
+    mask[z0:z1, y0:y1, x0:x1] = sub
+    return mask
+
+def _keep_cc_touching_mask(cc_arr, touch_mask):
+    labs = np.unique(cc_arr[touch_mask]); labs = labs[labs>0]
+    if labs.size == 0:
+        return np.zeros_like(touch_mask, dtype=bool)
+    m = np.zeros_like(touch_mask, dtype=bool)
+    for lab in labs:
+        m |= (cc_arr == lab)
+    return m
+
+def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh,
+                  select_surface, topk, dilate_radius, clip_z, z_strict,
+                  excel_path=None, sheet_name="Sheet1"):
     os.makedirs(post_dir, exist_ok=True)
     preds = natsorted([f for f in os.listdir(out_dir) if f.lower().endswith((".nii",".nii.gz",".npy",".npz"))])
     for case in preds:
@@ -165,19 +240,35 @@ def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh, selec
         ref = pref if pref is not None else img_ref
         pred_bin=(pred_arr>0).astype(np.uint8)
         cc_arr=_connected_components(pred_bin, ref)
-        lung_bin=(lung_arr>0).astype(np.uint8)
-        dist_arr=_danielsson(lung_bin, ref)
-        keep=np.zeros_like(pred_bin,bool)
-        for lab in range(1,int(cc_arr.max())+1):
-            comp=(cc_arr==lab)
-            if comp.any() and dist_arr[comp].min()<=dist_thresh:
-                keep|=comp
-        if z_strict:
-            keep=_apply_z_strict(cc_arr, keep, lung_bin, ref)
-        elif clip_z:
-            keep=_apply_z_clip(keep, lung_bin)
-        if select_surface:
-            keep=_select_surface(cc_arr, keep, lung_bin, ref, topk, dilate_radius)
+
+        excel_mode = excel_path is not None and len(str(excel_path).strip())>0 and os.path.exists(excel_path)
+
+        if excel_mode:
+            core = _stem_core(os.path.basename(pred_path))
+            try:
+                z,y,x = _read_xyz_median_from_excel(excel_path, sheet_name, core)
+                z,y,x = _clip_center(z,y,x, pred_bin.shape)
+                z_spacing = float(ref.GetSpacing()[2]) if hasattr(ref, "GetSpacing") else 1.0
+                radius_vox = int(np.ceil(20.0 / max(z_spacing, 1e-6)))
+                sphere = _sphere_mask(pred_bin.shape, (z,y,x), radius_vox)
+                keep = _keep_cc_touching_mask(cc_arr, sphere)
+            except Exception:
+                keep = np.zeros_like(pred_bin, dtype=bool)
+        else:
+            lung_bin=(lung_arr>0).astype(np.uint8)
+            dist_arr=_danielsson(lung_bin, ref)
+            keep=np.zeros_like(pred_bin,bool)
+            for lab in range(1,int(cc_arr.max())+1):
+                comp=(cc_arr==lab)
+                if comp.any() and dist_arr[comp].min()<=dist_thresh:
+                    keep|=comp
+            if z_strict:
+                keep=_apply_z_strict(cc_arr, keep, lung_bin, ref)
+            elif clip_z:
+                keep=_apply_z_clip(keep, lung_bin)
+            if select_surface:
+                keep=_select_surface(cc_arr, keep, lung_bin, ref, topk, dilate_radius)
+
         out = np.where(keep, pred_arr, 0).astype(pred_arr.dtype)
         ct = sitk.GetArrayFromImage(img_ref).astype(np.float32)
         out[ct <= hu_threshold] = 0
@@ -200,6 +291,8 @@ if __name__=="__main__":
     ap.add_argument("--dilate_radius", type=int, default=1)
     ap.add_argument("--clip_z", action="store_true")
     ap.add_argument("--z_strict", action="store_true")
+    ap.add_argument("--excel_path", type=str, default=None)
+    ap.add_argument("--sheet_name", type=str, default="Sheet1")
     args=ap.parse_args()
     filter_inline(
         args.input_dir,
@@ -211,5 +304,7 @@ if __name__=="__main__":
         args.topk,
         args.dilate_radius,
         args.clip_z,
-        args.z_strict
+        args.z_strict,
+        excel_path=args.excel_path,
+        sheet_name=args.sheet_name
     )
