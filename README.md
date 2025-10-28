@@ -39,11 +39,6 @@ CSV_DIR: Metric 저장 폴더 경로
 python preprocessing.py --dcm_dir GT_DIR --excel_path EXCEL_DIR
 ```
 
-DICOM2NII
-```bash
-python dcm2nii.py --dcm_dir DCM_DIR --nii_dir NII_DIR
-```
-
 ## NII 변환 진행
 
 DICOM2NII
