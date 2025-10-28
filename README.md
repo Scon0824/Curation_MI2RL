@@ -32,6 +32,16 @@ CSV_DIR: Metric 저장 폴더 경로
 
 (CSV_DIR 이후에 metric_ep##.csv 등의 이름까지 작성 필요)
 
+## Center Point -> Excel로 저장
+```bash
+python preprocessing.py --dcm_dir GT_DIR --excel_path EXCEL_DIR
+```
+
+DICOM2NII
+```bash
+python dcm2nii.py --dcm_dir DCM_DIR --nii_dir NII_DIR
+```
+
 ## NII 변환 진행
 
 DICOM2NII
@@ -54,7 +64,11 @@ python test.py --ckpt CKPT_DIR/ckpt_ep##.pt --input_dir NII_DIR --out_dir OUTPUT
 ```
 
 ## Postprocessing 진행
-
+Excel 파일이 있는 경우
+```bash
+python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --excel_path EXCEL_DIR --sheet_name SHEET_NAME
+```
+엑셀 파일이 없는 경우
 ```bash
 python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --select_surface --z_strict
 ```
