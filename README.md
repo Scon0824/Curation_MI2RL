@@ -63,7 +63,7 @@ python test.py --ckpt CKPT_DIR/ckpt_ep##.pt --input_dir NII_DIR --out_dir OUTPUT
 ## Postprocessing 진행
 Excel 파일이 있는 경우
 ```bash
-python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --excel_path EXCEL_DIR --sheet_name SHEET_NAME
+python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --excel_path EXCEL_DIR
 ```
 Excel 파일이 없는 경우
 ```bash
