@@ -21,6 +21,7 @@ LBL_DIR:  원본 DICOM label 폴더 경로
 GT_DIR: 변환된 NII label 폴더 경로
 
 EXCEL_DIR: Center point가 담긴 엑셀 파일 저장 경로
+(EXCEL_DIR 이후에 centerpoint.xlsx 등의 이름까지 작성 필요)
 
 CKPT_DIR : checkpoint 폴더의 경로
 
