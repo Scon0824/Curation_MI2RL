@@ -68,7 +68,7 @@ python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POS
 ```
 Excel 파일이 없는 경우
 ```bash
-python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --select_surface --z_strict
+python postprocessing.py --input_dir NII_DIR --out_dir OUTPUT_DIR --post_dir POST_DIR --z_strict
 ```
 
 ## Metric 진행
