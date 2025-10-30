@@ -170,31 +170,48 @@ def _normalize_case_name(s):
 def _read_xyz_median_from_excel(excel_path, sheet_name, case_name):
     import pandas as pd
     df = pd.read_excel(excel_path, sheet_name=sheet_name)
-    cols = {c.lower(): c for c in df.columns}
-    norm_target = _normalize_case_name(case_name)
-    if ("case" in cols) and ("z" in cols) and ("y" in cols) and ("x" in cols):
-        name_col = cols["case"]; zc,yc,xc = cols["z"], cols["y"], cols["x"]
+    cols_lower = {str(c).strip().lower(): c for c in df.columns}
+    name_key = "case" if "case" in cols_lower else ("case_id" if "case_id" in cols_lower else None)
+    if name_key is not None and all(k in cols_lower for k in ("x","y","z")):
+        name_col = cols_lower[name_key]
+        xcol, ycol, zcol = cols_lower["x"], cols_lower["y"], cols_lower["z"]
         df["_norm_case"] = df[name_col].astype(str).apply(_normalize_case_name)
-        rows = df[df["_norm_case"] == norm_target]
+        rows = df[df["_norm_case"] == _normalize_case_name(case_name)]
         if len(rows) == 0:
-            raise KeyError(f"case not found: {case_name}")
-        z = float(rows[zc].median())
-        y = float(rows[yc].median())
-        x = float(rows[xc].median())
-        return int(round(z)), int(round(y)), int(round(x))
-    if {"z","y","x"}.issubset(set(str(i).strip().lower() for i in df.iloc[:,0].tolist())):
-        first_col = df.columns[0]
+            return None
+        x = pd.to_numeric(rows[xcol], errors="coerce").dropna()
+        y = pd.to_numeric(rows[ycol], errors="coerce").dropna()
+        z = pd.to_numeric(rows[zcol], errors="coerce").dropna()
+        if x.empty or y.empty or z.empty:
+            return None
+        xm = int(round(float(x.median())))
+        ym = int(round(float(y.median())))
+        zm = int(round(float(z.median())))
+        return zm, ym, xm
+    first_col = df.columns[0]
+    first_vals = [str(i).strip().lower() for i in df[first_col].astype(str).tolist()]
+    if {"z","y","x"}.issubset(set(first_vals)):
+        import pandas as pd
         df[first_col] = df[first_col].astype(str).str.strip().str.lower()
         df = df.set_index(first_col)
         norm_cols = {_normalize_case_name(c): c for c in df.columns}
-        if norm_target not in norm_cols:
-            raise KeyError(f"case not found: {case_name}")
-        c = norm_cols[norm_target]
-        z = float(np.median(np.array(df.loc["z", c]).astype(float).ravel()))
-        y = float(np.median(np.array(df.loc["y", c]).astype(float).ravel()))
-        x = float(np.median(np.array(df.loc["x", c]).astype(float).ravel()))
-        return int(round(z)), int(round(y)), int(round(x))
-    raise ValueError("excel format unsupported")
+        key = _normalize_case_name(case_name)
+        if key not in norm_cols:
+            return None
+        c = norm_cols[key]
+        def _med(v):
+            v = pd.to_numeric(np.array(v).ravel(), errors="coerce")
+            v = v[~np.isnan(v)]
+            if v.size == 0:
+                return None
+            return int(round(float(np.median(v))))
+        zm = _med(df.loc["z", c])
+        ym = _med(df.loc["y", c])
+        xm = _med(df.loc["x", c])
+        if zm is None or ym is None or xm is None:
+            return None
+        return zm, ym, xm
+    return None
 
 def _clip_center(z, y, x, shape):
     Z,Y,X = shape
@@ -227,6 +244,24 @@ def _keep_cc_touching_mask(cc_arr, touch_mask):
         m |= (cc_arr == lab)
     return m
 
+def _run_existing_pipeline(pred_arr, ref, lung_arr, dist_thresh, clip_z, z_strict, select_surface, topk, dilate_radius):
+    pred_bin = (pred_arr>0).astype(np.uint8)
+    cc_arr = _connected_components(pred_bin, ref)
+    lung_bin = (lung_arr>0).astype(np.uint8)
+    dist_arr = _danielsson(lung_bin, ref)
+    keep = np.zeros_like(pred_bin, bool)
+    for lab in range(1, int(cc_arr.max())+1):
+        comp = (cc_arr==lab)
+        if comp.any() and dist_arr[comp].min()<=dist_thresh:
+            keep |= comp
+    if z_strict:
+        keep = _apply_z_strict(cc_arr, keep, lung_bin, ref)
+    elif clip_z:
+        keep = _apply_z_clip(keep, lung_bin)
+    if select_surface:
+        keep = _select_surface(cc_arr, keep, lung_bin, ref, topk, dilate_radius)
+    return keep
+
 def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh,
                   select_surface, topk, dilate_radius, clip_z, z_strict,
                   excel_path=None, sheet_name="Sheet1"):
@@ -238,45 +273,42 @@ def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh,
         img_ref, lung_arr = _make_lung(img_path, hu_threshold)
         pref, pred_arr = _read_pred_array(pred_path)
         ref = pref if pref is not None else img_ref
-        pred_bin=(pred_arr>0).astype(np.uint8)
-        cc_arr=_connected_components(pred_bin, ref)
 
         excel_mode = excel_path is not None and len(str(excel_path).strip())>0 and os.path.exists(excel_path)
+        keep = None
 
         if excel_mode:
             core = _stem_core(os.path.basename(pred_path))
+            coords = None
             try:
-                z,y,x = _read_xyz_median_from_excel(excel_path, sheet_name, core)
-                z,y,x = _clip_center(z,y,x, pred_bin.shape)
+                coords = _read_xyz_median_from_excel(excel_path, sheet_name, core)
+            except Exception:
+                coords = None
+            if coords is not None:
+                z,y,x = _clip_center(coords[0], coords[1], coords[2], pred_arr.shape)
                 z_spacing = float(ref.GetSpacing()[2]) if hasattr(ref, "GetSpacing") else 1.0
                 radius_vox = int(np.ceil(20.0 / max(z_spacing, 1e-6)))
-                sphere = _sphere_mask(pred_bin.shape, (z,y,x), radius_vox)
+                pred_bin = (pred_arr>0).astype(np.uint8)
+                cc_arr = _connected_components(pred_bin, ref)
+                sphere = _sphere_mask(pred_arr.shape, (z,y,x), radius_vox)
                 keep = _keep_cc_touching_mask(cc_arr, sphere)
-            except Exception:
-                keep = np.zeros_like(pred_bin, dtype=bool)
-        else:
-            lung_bin=(lung_arr>0).astype(np.uint8)
-            dist_arr=_danielsson(lung_bin, ref)
-            keep=np.zeros_like(pred_bin,bool)
-            for lab in range(1,int(cc_arr.max())+1):
-                comp=(cc_arr==lab)
-                if comp.any() and dist_arr[comp].min()<=dist_thresh:
-                    keep|=comp
-            if z_strict:
-                keep=_apply_z_strict(cc_arr, keep, lung_bin, ref)
-            elif clip_z:
-                keep=_apply_z_clip(keep, lung_bin)
-            if select_surface:
-                keep=_select_surface(cc_arr, keep, lung_bin, ref, topk, dilate_radius)
 
-        out = np.where(keep, pred_arr, 0).astype(pred_arr.dtype)
+        if keep is None or not np.any(keep):
+            keep = _run_existing_pipeline(pred_arr, ref, lung_arr, dist_thresh, clip_z, z_strict, select_surface, topk, dilate_radius)
+
+        if not np.any(keep):
+            out = np.zeros_like(pred_arr, dtype=pred_arr.dtype)
+        else:
+            out = np.where(keep, pred_arr, 0).astype(pred_arr.dtype)
+
         ct = sitk.GetArrayFromImage(img_ref).astype(np.float32)
         out[ct <= hu_threshold] = 0
-        out_path=_make_out(pred_path,post_dir)
+
+        out_path = _make_out(pred_path, post_dir)
         if _is_nii(out_path):
-            o=sitk.GetImageFromArray(out); o.CopyInformation(ref); sitk.WriteImage(o,out_path)
+            o = sitk.GetImageFromArray(out); o.CopyInformation(ref); sitk.WriteImage(o, out_path)
         else:
-            np.save(out_path,out)
+            np.save(out_path, out)
 
 if __name__=="__main__":
     import argparse
