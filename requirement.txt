@@ -7,4 +7,5 @@ tqdm
 scikit-image
 scipy
 SimpleITK
+sklearn
 nibabel
