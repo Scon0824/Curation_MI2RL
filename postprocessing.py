@@ -167,51 +167,37 @@ def _normalize_case_name(s):
         s = s[:-1]
     return s
 
-def _read_xyz_median_from_excel(excel_path, sheet_name, case_name):
+def _read_points_from_excel(excel_path, sheet_name, case_name):
     import pandas as pd
     df = pd.read_excel(excel_path, sheet_name=sheet_name)
-    cols_lower = {str(c).strip().lower(): c for c in df.columns}
-    name_key = "case" if "case" in cols_lower else ("case_id" if "case_id" in cols_lower else None)
-    if name_key is not None and all(k in cols_lower for k in ("x","y","z")):
-        name_col = cols_lower[name_key]
-        xcol, ycol, zcol = cols_lower["x"], cols_lower["y"], cols_lower["z"]
-        df["_norm_case"] = df[name_col].astype(str).apply(_normalize_case_name)
-        rows = df[df["_norm_case"] == _normalize_case_name(case_name)]
-        if len(rows) == 0:
-            return None
-        x = pd.to_numeric(rows[xcol], errors="coerce").dropna()
-        y = pd.to_numeric(rows[ycol], errors="coerce").dropna()
-        z = pd.to_numeric(rows[zcol], errors="coerce").dropna()
-        if x.empty or y.empty or z.empty:
-            return None
-        xm = int(round(float(x.median())))
-        ym = int(round(float(y.median())))
-        zm = int(round(float(z.median())))
-        return zm, ym, xm
-    first_col = df.columns[0]
-    first_vals = [str(i).strip().lower() for i in df[first_col].astype(str).tolist()]
-    if {"z","y","x"}.issubset(set(first_vals)):
-        import pandas as pd
-        df[first_col] = df[first_col].astype(str).str.strip().str.lower()
-        df = df.set_index(first_col)
-        norm_cols = {_normalize_case_name(c): c for c in df.columns}
-        key = _normalize_case_name(case_name)
-        if key not in norm_cols:
-            return None
-        c = norm_cols[key]
-        def _med(v):
-            v = pd.to_numeric(np.array(v).ravel(), errors="coerce")
-            v = v[~np.isnan(v)]
-            if v.size == 0:
-                return None
-            return int(round(float(np.median(v))))
-        zm = _med(df.loc["z", c])
-        ym = _med(df.loc["y", c])
-        xm = _med(df.loc["x", c])
-        if zm is None or ym is None or xm is None:
-            return None
-        return zm, ym, xm
-    return None
+    cols = {c.lower(): c for c in df.columns.astype(str)}
+    name_col = None
+    for k in ("case_id","case"):
+        if k in cols:
+            name_col = cols[k]
+            break
+    if name_col is None:
+        return []
+
+    need = [k for k in ("x","y","z") if k in cols]
+    if len(need) < 3:
+        return []
+
+    df["_norm_case"] = df[name_col].astype(str).apply(_normalize_case_name)
+    rows = df[df["_norm_case"] == _normalize_case_name(case_name)]
+    points = []
+    if len(rows) == 0:
+        return points
+
+    for _, r in rows.iterrows():
+        try:
+            x = int(round(float(r[cols["x"]])))
+            y = int(round(float(r[cols["y"]])))
+            z = int(round(float(r[cols["z"]])))
+            points.append((z, y, x))
+        except Exception:
+            continue
+    return points
 
 def _clip_center(z, y, x, shape):
     Z,Y,X = shape
@@ -235,14 +221,20 @@ def _sphere_mask(shape, center, radius_vox):
     mask[z0:z1, y0:y1, x0:x1] = sub
     return mask
 
-def _keep_cc_touching_mask(cc_arr, touch_mask):
-    labs = np.unique(cc_arr[touch_mask]); labs = labs[labs>0]
+def _select_one_cc_for_point(cc_arr, sphere_mask, excluded_labels):
+    labs = np.unique(cc_arr[sphere_mask])
+    labs = labs[(labs > 0) & (~np.isin(labs, list(excluded_labels)))]
     if labs.size == 0:
-        return np.zeros_like(touch_mask, dtype=bool)
-    m = np.zeros_like(touch_mask, dtype=bool)
+        return None
+    # 겹침 픽셀 수 최대 라벨 선택
+    best_lab = None
+    best_overlap = -1
     for lab in labs:
-        m |= (cc_arr == lab)
-    return m
+        overlap = int(np.sum((cc_arr == lab) & sphere_mask))
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_lab = int(lab)
+    return best_lab
 
 def _run_existing_pipeline(pred_arr, ref, lung_arr, dist_thresh, clip_z, z_strict, select_surface, topk, dilate_radius):
     pred_bin = (pred_arr>0).astype(np.uint8)
@@ -274,26 +266,33 @@ def filter_inline(input_dir, out_dir, post_dir, hu_threshold, dist_thresh,
         pref, pred_arr = _read_pred_array(pred_path)
         ref = pref if pref is not None else img_ref
 
+        pred_bin = (pred_arr > 0).astype(np.uint8)
+        cc_arr = _connected_components(pred_bin, ref)
+
         excel_mode = excel_path is not None and len(str(excel_path).strip())>0 and os.path.exists(excel_path)
-        keep = None
+        keep = np.zeros_like(pred_bin, bool)
 
         if excel_mode:
             core = _stem_core(os.path.basename(pred_path))
-            coords = None
+            points = []
             try:
-                coords = _read_xyz_median_from_excel(excel_path, sheet_name, core)
+                points = _read_points_from_excel(excel_path, sheet_name, core)
             except Exception:
-                coords = None
-            if coords is not None:
-                z,y,x = _clip_center(coords[0], coords[1], coords[2], pred_arr.shape)
+                points = []
+            if len(points) > 0:
                 z_spacing = float(ref.GetSpacing()[2]) if hasattr(ref, "GetSpacing") else 1.0
                 radius_vox = int(np.ceil(20.0 / max(z_spacing, 1e-6)))
-                pred_bin = (pred_arr>0).astype(np.uint8)
-                cc_arr = _connected_components(pred_bin, ref)
-                sphere = _sphere_mask(pred_arr.shape, (z,y,x), radius_vox)
-                keep = _keep_cc_touching_mask(cc_arr, sphere)
 
-        if keep is None or not np.any(keep):
+                chosen_labels = set()
+                for (z, y, x) in points:
+                    z, y, x = _clip_center(z, y, x, pred_arr.shape)
+                    sphere = _sphere_mask(pred_arr.shape, (z, y, x), radius_vox)
+                    lab = _select_one_cc_for_point(cc_arr, sphere, chosen_labels)
+                    if lab is not None:
+                        keep |= (cc_arr == lab)
+                        chosen_labels.add(lab)
+
+        if not np.any(keep):
             keep = _run_existing_pipeline(pred_arr, ref, lung_arr, dist_thresh, clip_z, z_strict, select_surface, topk, dilate_radius)
 
         if not np.any(keep):
